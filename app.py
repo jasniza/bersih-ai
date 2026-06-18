@@ -72,34 +72,77 @@ if st.session_state.auth["logged_in"]:
         st.rerun()
 
 # ------------------------------------------
-# MOD A: PORTAL AWAM
+# MOD A: PORTAL AWAM (VERSI STABIL & SIFAR-RALAT)
 # ------------------------------------------
 if mode == "📱 Portal Awam (Sukarelawan)":
     st.title("♻️ Hero Kebersihan: Lapor & Bersih")
-    st.info("Laporkan lokasi sampah haram untuk tindakan segera PBT anda.")
+    st.subheader("Aduan Sampah Haram Terengganu")
+    st.info("💡 **Cara Tetapkan Lokasi:** Sila klik/ketik pada peta di bawah untuk menanda lokasi longgokan sampah sebelum mengisi borang aduan.")
     
-    with st.form("borang_aduan", clear_on_submit=True):
-        kawasan = st.selectbox("Daerah:", ["Kuala Terengganu", "Kuala Nerus", "Marang", "Besut", "Setiu", "Hulu Terengganu", "Dungun", "Kemaman"])
-        col_lat, col_lon = st.columns(2)
-        lat = col_lat.number_input("Lat:", value=5.3300, format="%.4f")
-        lon = col_lon.number_input("Lon:", value=103.1400, format="%.4f")
-        gambar = st.file_uploader("Gambar Sisa:", type=["jpg", "png", "jpeg"])
-        hantar = st.form_submit_button("Hantar Laporan AI")
+    # 1. Tetapkan state koordinat klik (Default: Kuala Terengganu)
+    if 'click_coord' not in st.session_state:
+        st.session_state.click_coord = (5.3300, 103.1400)
         
-        if hantar and gambar:
-            with st.spinner("AI sedang menganalisis..."):
-                hasil_ai = analisa_gambar_dengan_ai(gambar.getvalue())
-                rekod = {
-                    "ID": f"ADU-00{len(st.session_state.db_aduan)+1}",
-                    "Tarikh": datetime.today().strftime('%Y-%m-%d'),
-                    "Kawasan": kawasan,
-                    "Kategori": hasil_ai.get("kategori"),
-                    "Risiko": hasil_ai.get("risiko"),
-                    "Lat": lat, "Lon": lon, "Status": "Baru"
-                }
-                st.session_state.db_aduan.append(rekod)
-                st.success("Aduan berjaya dihantar!")
-                st.json(hasil_ai)
+    st.markdown("### 📍 Langkah 1: Ketik Lokasi Pada Peta")
+    
+    # 2. Bina peta luar daripada form supaya folium boleh berfungsi interaktif
+    m_user = folium.Map(location=st.session_state.click_coord, zoom_start=11)
+    folium.Marker(
+        location=st.session_state.click_coord,
+        popup="Lokasi Sampah Terpilih",
+        icon=folium.Icon(color="red", icon="exclamation-sign")
+    ).add_to(m_user)
+    
+    # Paparkan peta interaktif
+    peta_klik = st_folium(m_user, width="100%", height=350, key="peta_aduan_terbuka")
+    
+    # Ambil koordinat jika pengguna klik kawasan lain pada peta
+    if peta_klik and peta_klik.get("last_clicked"):
+        lat_terpilih = peta_klik["last_clicked"]["lat"]
+        lon_terpilih = peta_klik["last_clicked"]["lng"]
+        st.session_state.click_coord = (lat_terpilih, lon_terpilih)
+
+    st.markdown("---")
+    
+    # 3. Borang Maklumat & Gambar Sisa
+    with st.form("borang_aduan_bersih", clear_on_submit=True):
+        st.markdown("### 📝 Langkah 2: Butiran Aduan & Gambar")
+        
+        kawasan = st.selectbox("Daerah Kejadian:", ["Kuala Terengganu", "Kuala Nerus", "Marang", "Besut", "Setiu", "Hulu Terengganu", "Dungun", "Kemaman"])
+        
+        # Paparkan koordinat yang sedang aktif dipilih pada Langkah 1
+        st.write(f"📌 **Koordinat Terkunci:** Latitude: `{st.session_state.click_coord[0]:.4f}` | Longitude: `{st.session_state.click_coord[1]:.4f}`")
+        
+        gambar = st.file_uploader("Muat naik gambar bukti longgokan sampah:", type=["jpg", "png", "jpeg"])
+        hantar = st.form_submit_button("🚀 Hantar Laporan Ke Enjin AI")
+        
+        if hantar:
+            if gambar is not None:
+                with st.spinner("🤖 Enjin AI sedang menganalisis gambar anda..."):
+                    hasil_ai = analisa_gambar_dengan_ai(gambar.getvalue())
+                    
+                    id_baru = f"ADU-00{len(st.session_state.db_aduan) + 1}"
+                    rekod = {
+                        "ID": id_baru,
+                        "Tarikh": datetime.today().strftime('%Y-%m-%d'),
+                        "Kawasan": kawasan,
+                        "Kategori": hasil_ai.get("kategori", "Sisa Campuran"),
+                        "Risiko": hasil_ai.get("risiko", "Sederhana"),
+                        "Lat": st.session_state.click_coord[0],
+                        "Lon": st.session_state.click_coord[1],
+                        "Status": "Baru"
+                    }
+                    st.session_state.db_aduan.append(rekod)
+                    st.success(f"🎉 Syabas Hero! Aduan {id_baru} berjaya dihantar ke {kawasan}.")
+                    
+                    # Papar hasil AI kepada pengguna
+                    st.subheader("🤖 Hasil Imbasan AI Masa-Nyata:")
+                    col_res1, col_res2 = st.columns(2)
+                    col_res1.metric(label="Kategori Sisa Dikesan", value=hasil_ai.get("kategori"))
+                    col_res2.metric(label="Tahap Risiko / Volum", value=hasil_ai.get("risiko"))
+            else:
+                st.error("❌ Sila muat naik gambar terlebih dahulu sebelum menghantar aduan.")
+                
 
 # ------------------------------------------
 # MOD B: LOGIN & DASHBOARD PBT
