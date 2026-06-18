@@ -1,80 +1,82 @@
-else:
-        pbt_full_name = st.session_state.auth['pbt_name']
-        daerah_tapis = pbt_full_name.replace("MB ", "").replace("MP ", "").replace("MD ", "")
-        
-        st.title(f"🏢 Dashboard Operasi {pbt_full_name}")
-        st.subheader(f"Pengurusan Sisa Haram Daerah {daerah_tapis}")
-        
-        # Ambil data aduan daerah berkenaan sahaja
-        data_daerah_sahaja = [r for r in st.session_state.db_aduan if r["Kawasan"] == daerah_tapis]
-        
-        # KPI RINGKAS DAERAH
-        col1, col2, col3 = st.columns(3)
-        col1.metric(f"Jumlah Aduan {daerah_tapis}", len(data_daerah_sahaja))
-        col2.metric("Kes Baru", len([r for r in data_daerah_sahaja if r["Status"]=="Baru"]))
-        col3.metric("Selesai", len([r for r in data_daerah_sahaja if r["Status"]=="Selesai"]))
-        
-        st.markdown("---")
-        st.subheader("📋 Senarai Aduan & Profil Tindakan Lapangan")
-        
-        if not data_daerah_sahaja:
-            st.info(f"Alhamdulillah, tiada aduan aktif di daerah {daerah_tapis} buat masa ini.")
-        else:
-            # Bina kad tindakan dinamik untuk setiap aduan (Bukan st.table kaku lagi)
-            for aduan in data_daerah_sahaja:
-                with st.container():
-                    col_info, col_pengadu, col_img, col_action = st.columns([2, 2, 2, 1])
-                    
-                    # 1. Kolum Info Aduan & AI
-                    with col_info:
-                        st.markdown(f"### 🆔 {aduan['ID']}")
-                        st.write(f"📅 **Tarikh Lapor:** {aduan['Tarikh']}")
-                        st.write(f"🚯 **Kategori AI:** {aduan['Kategori']}")
-                        if aduan['Risiko'] == "Tinggi": 
-                            st.error(f"🚨 **Risiko:** {aduan['Risiko']}")
-                        elif aduan['Risiko'] == "Sederhana":
-                            st.warning(f"⚠️ **Risiko:** {aduan['Risiko']}")
-                        else: 
-                            st.success(f"✅ **Risiko:** {aduan['Risiko']}")
-                        st.write(f"📍 **Koordinat:** `{aduan['Lat']:.4f}, {aduan['Lon']:.4f}`")
-                    
-                    # 2. Kolum Maklumat Pengadu
-                    with col_pengadu:
-                        st.markdown("🗣️ **Maklumat Pengadu:**")
-                        st.write(f"👤 **Nama:** {aduan.get('Nama', 'Anonim')}")
-                        st.write(f"📞 **No. Tel:** {aduan.get('Telefon', 'Tiada')}")
-                        st.write(f"✉️ **Emel:** {aduan.get('Emel', 'Tiada')}")
-                        st.info(f"💬 **Catatan:** {aduan.get('Catatan', 'Tiada')}")
-                    
-                    # 3. Kolum Gambar Bukti Lapangan
-                    with col_img:
-                        st.markdown("**📸 Gambar Bukti:**")
-                        if aduan['ID'] in ["ADU-001", "ADU-002", "ADU-003", "ADU-004"]:
-                            st.image("https://images.unsplash.com/photo-1611284446314-60a58ac0deb9?w=400", width=180, caption="Bukti Lokasi")
-                        else:
-                            st.info("🖼️ Gambar sedia pada pelayan.")
-                    
-                    # 4. Kolum Borang Kemas Kini Status Operasi PBT
-                    with col_action:
-                        st.markdown("**⚡ Status Tindakan:**")
-                        # Papar label status semasa
-                        status_semasa = aduan['Status']
-                        status_warna = "🔵 Baru" if status_semasa == "Baru" else "🟡 Dalam Tindakan" if status_semasa == "Dalam Tindakan" else "🟢 Selesai"
-                        st.markdown(f"**Semasa:** {status_warna}")
-                        
-                        # Kotak pilihan untuk menukar status lori
-                        senarai_pilihan = ["Baru", "Dalam Tindakan", "Selesai"]
-                        indeks_asal = senarai_pilihan.index(status_semasa) if status_semasa in senarai_pilihan else 0
-                        
-                        status_baru = st.selectbox("Tukar Ke:", senarai_pilihan, key=f"sel_{aduan['ID']}", index=indeks_asal)
-                        
-                        # Butang untuk simpan perubahan ke database session_state
-                        if st.button("Simpan 💾", key=f"btn_{aduan['ID']}"):
-                            for main_r in st.session_state.db_aduan:
-                                if main_r["ID"] == aduan['ID']: 
-                                    main_r["Status"] = status_baru
-                            st.success(f"ID {aduan['ID']} Dikemaskini!")
-                            st.rerun()
-                            
-                # Garis pemisah antara aduan
-                st.markdown("<hr style='border:1px dashed #ccc'>", unsafe_allow_html=True)
+import streamlit as st
+import requests
+import json
+import folium
+from streamlit_folium import st_folium
+from datetime import datetime
+import matplotlib.pyplot as plt
+
+# ==========================================
+# 1. KONFIGURASI HALAMAN
+# ==========================================
+st.set_page_config(
+    page_title="Hero Kebersihan AI - Executive",
+    page_icon="♻️",
+    layout="wide"
+)
+
+# Ambil API Key dari Secrets Streamlit
+GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "MASUKKAN_API_KEY_ANDA")
+
+# DATABASE PENGGUNA PBT (8 PBT Terengganu)
+USERS_PBT = {
+    "admin_kt": {"nama": "MB Kuala Terengganu", "pass": "PBT2026"},
+    "admin_kn": {"nama": "MP Kuala Nerus", "pass": "PBT2026"},
+    "admin_marang": {"nama": "MD Marang", "pass": "PBT2026"},
+    "admin_besut": {"nama": "MD Besut", "pass": "PBT2026"},
+    "admin_setiu": {"nama": "MD Setiu", "pass": "PBT2026"},
+    "admin_hulu": {"nama": "MD Hulu Terengganu", "pass": "PBT2026"},
+    "admin_dungun": {"nama": "MP Dungun", "pass": "PBT2026"},
+    "admin_kemaman": {"nama": "MP Kemaman", "pass": "PBT2026"},
+}
+
+# INITIALIZE DATABASE ADUAN MASTER
+if 'db_aduan' not in st.session_state:
+    st.session_state.db_aduan = [
+        {"ID": "ADU-001", "Tarikh": "2026-06-15", "Kawasan": "Kuala Terengganu", "Kategori": "Sisa Pukal", "Risiko": "Tinggi", "Lat": 5.3302, "Lon": 103.1408, "Status": "Dalam Tindakan", "Nama": "Ahmad Bin Ali", "Telefon": "012-3456789", "Emel": "ahmad@email.com", "Catatan": "Sisa perabot lama dibuang tepi simpang."},
+        {"ID": "ADU-002", "Tarikh": "2026-06-16", "Kawasan": "Marang", "Kategori": "Sisa Plastik", "Risiko": "Rendah", "Lat": 5.2114, "Lon": 103.2144, "Status": "Selesai", "Nama": "Siti Aminah", "Telefon": "019-9876543", "Emel": "siti@email.com", "Catatan": "Botol plastik menyumbat parit taman."},
+        {"ID": "ADU-003", "Tarikh": "2026-06-17", "Kawasan": "Kuala Nerus", "Kategori": "Sisa Domestik", "Risiko": "Sederhana", "Lat": 5.3660, "Lon": 103.1020, "Status": "Baru", "Nama": "Zulkifli", "Telefon": "013-4455667", "Emel": "zul@email.com", "Catatan": "Sampah dapur berbau melimpah."},
+        {"ID": "ADU-004", "Tarikh": "2026-06-18", "Kawasan": "Kemaman", "Kategori": "Sisa Elektronik", "Risiko": "Tinggi", "Lat": 4.2260, "Lon": 103.4240, "Status": "Baru", "Nama": "Wan Mohd", "Telefon": "011-232345", "Emel": "wan@email.com", "Catatan": "Bateri dan komponen TV lama rosak."}
+    ]
+
+if 'auth' not in st.session_state:
+    st.session_state.auth = {"logged_in": False, "user": None, "pbt_name": ""}
+
+# ==========================================
+# 2. FUNGSI AI (GROQ VISION)
+# ==========================================
+def analisa_gambar_dengan_ai(image_bytes):
+    import base64
+    base64_image = base64.b64encode(image_bytes).decode('utf-8')
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    prompt = "Identify waste category and risk level (Rendah, Sederhana, Tinggi). Respond ONLY with JSON: {\"kategori\": \"...\", \"risiko\": \"...\"}"
+    payload = {
+        "model": "llama-3.2-11b-vision-preview",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
+    }
+    try:
+        response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload)
+        ai_message = response.json()['choices'][0]['message']['content']
+        return json.loads(ai_message.strip())
+    except:
+        return {"kategori": "Sisa Domestik (Simulasi)", "risiko": "Sederhana"}
+
+# ==========================================
+# 3. ANTARA MUKA (SIDEBAR)
+# ==========================================
+st.sidebar.title("📌 Menu Hero Kebersihan")
+mode = st.sidebar.selectbox(
+    "Pilih Mod Akses:", 
+    ["📊 Dashboard Eksekutif (Pengurusan)", "📱 Portal Awam (Sukarelawan)", "🏢 Login PBT Admin"]
+)
+
+if st.session_state.auth["logged_in"]:
+    st.sidebar.success(f"Log Masuk: {st.session_state.auth['pbt_name']}")
+    if st.sidebar.button("Log Keluar"):
+        st.session_state.auth = {"logged_in": False, "user": None, "pbt_name": ""}
+        st.rerun()
+
+# ------------------------------------------
+# MOD 1: DASHBOARD EKSEKUTIF (MENGGUNAKAN CARTA PAI)
+# ------------------------------------------
+if mode == "📊 Dashboard Eksekutif (Pengurusan)":
